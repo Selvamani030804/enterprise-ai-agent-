@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Enterprise AI Agent | R. Selvamani</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    body { background-color: #0b0f19; color: #e2e8f0; }
+    .glass { background: rgba(17, 24, 39, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .chat-scroll::-webkit-scrollbar { width: 6px; }
+    .chat-scroll::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+  </style>
+</head>
+<body class="h-screen flex flex-col md:flex-row font-sans overflow-hidden">
+
+  <!-- Sidebar: Upload Section -->
+  <aside class="w-full md:w-80 glass flex flex-col p-5 border-b md:border-b-0 md:border-r border-gray-800">
+    <div class="flex items-center gap-3 mb-6">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/20">
+        <i class="fa-solid fa-brain text-lg"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-lg leading-tight text-white">Enterprise AI</h1>
+        <p class="text-xs text-cyan-400 font-medium">Document RAG Assistant</p>
+      </div>
+    </div>
+
+    <!-- Drag & Drop Upload Box -->
+    <div class="flex-1 flex flex-col">
+      <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Knowledge Base</label>
+      
+      <div id="drop-zone" class="border-2 border-dashed border-gray-700 hover:border-cyan-500 transition-colors rounded-2xl p-6 text-center cursor-pointer bg-gray-900/40 flex flex-col items-center justify-center">
+        <i class="fa-solid fa-cloud-arrow-up text-3xl text-gray-400 mb-3" id="upload-icon"></i>
+        <p class="text-sm font-medium text-gray-200" id="upload-text">Click or Drag PDF here</p>
+        <p class="text-xs text-gray-500 mt-1">PDF files up to 25MB</p>
+        <input type="file" id="pdf-input" accept=".pdf" class="hidden">
+      </div>
+
+      <div id="upload-status" class="mt-4 hidden p-3 rounded-xl text-xs font-medium border"></div>
+
+      <!-- Live Info & Developer Credits -->
+      <div class="mt-auto pt-4 border-t border-gray-800 text-xs text-gray-400 flex flex-col gap-2">
+        <div class="flex justify-between items-center">
+          <span>Vector Database:</span>
+          <span class="text-emerald-400 font-semibold flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ChromaDB
+          </span>
+        </div>
+        <div class="flex justify-between items-center">
+          <span>AI Engine:</span>
+          <span class="text-cyan-400 font-semibold">Gemini Flash</span>
+        </div>
+        <div class="mt-2 pt-3 border-t border-gray-800/60 text-center">
+          <p class="text-[11px] text-gray-300 font-medium">Developed by <span class="text-cyan-400 font-bold">R. Selvamani</span></p>
+          <p class="text-[9px] text-gray-500 mt-0.5">Enterprise AI Engineer © 2026</p>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Chat Section -->
+  <main class="flex-1 flex flex-col h-full bg-slate-950/60 relative">
+    <header class="p-4 glass border-b border-gray-800 flex justify-between items-center px-6">
+      <div class="flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+        <span class="text-sm font-medium text-gray-200">RAG Assistant Ready</span>
+      </div>
+      <button onclick="clearChat()" class="text-xs text-gray-400 hover:text-white transition flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-gray-800">
+        <i class="fa-solid fa-rotate-right"></i> Reset Chat
+      </button>
+    </header>
+
+    <div id="chat-messages" class="flex-1 p-6 overflow-y-auto chat-scroll flex flex-col gap-4">
+      <div class="flex gap-3 max-w-2xl">
+        <div class="w-8 h-8 rounded-lg bg-cyan-600 flex items-center justify-center shrink-0 text-white text-xs">
+          <i class="fa-solid fa-robot"></i>
+        </div>
+        <div class="glass p-4 rounded-2xl rounded-tl-none text-sm text-gray-200 leading-relaxed">
+          Hello! Upload your PDF document on the left panel. Once indexed, you can ask any questions, extract specific data points, or request detailed summaries.
+        </div>
+      </div>
+    </div>
+
+    <div class="p-4 glass border-t border-gray-800">
+      <form id="chat-form" class="max-w-4xl mx-auto flex gap-3 items-center" onsubmit="handleChatSubmit(event)">
+        <input 
+          type="text" 
+          id="user-input" 
+          placeholder="Ask a question about your document..." 
+          autocomplete="off"
+          class="flex-1 bg-gray-900/80 border border-gray-700 text-sm text-white rounded-xl px-4 py-3.5 focus:outline-none focus:border-cyan-500 transition-colors placeholder:text-gray-500"
+        >
+        <button 
+          type="submit" 
+          id="send-btn"
+          class="bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 transition px-5 py-3.5 rounded-xl font-medium text-sm text-white flex items-center gap-2 shadow-lg shadow-cyan-500/20 disabled:opacity-50"
+        >
+          <span>Send</span>
+          <i class="fa-solid fa-arrow-up"></i>
+        </button>
+      </form>
+    </div>
+  </main>
+
+  <script>
+    const dropZone = document.getElementById('drop-zone');
+    const pdfInput = document.getElementById('pdf-input');
+    const uploadStatus = document.getElementById('upload-status');
+    const chatMessages = document.getElementById('chat-messages');
+    const userInput = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+
+    dropZone.addEventListener('click', () => pdfInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-cyan-500'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-cyan-500'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('border-cyan-500');
+      if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
+    });
+
+    pdfInput.addEventListener('change', () => {
+      if (pdfInput.files.length) uploadFile(pdfInput.files[0]);
+    });
+
+    async function uploadFile(file) {
+      if (!file.name.endsWith('.pdf')) {
+        showStatus('Only PDF files are supported.', 'error');
+        return;
+      }
+
+      showStatus(`Uploading & indexing ${file.name}...`, 'loading');
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        if (res.ok) {
+          showStatus(`✓ ${file.name} indexed (${data.chunks_indexed} chunks)`, 'success');
+        } else {
+          showStatus(data.detail || 'Upload failed.', 'error');
+        }
+      } catch (err) {
+        showStatus('Server connection error.', 'error');
+      }
+    }
+
+    function showStatus(msg, type) {
+      uploadStatus.classList.remove('hidden', 'bg-emerald-950/60', 'border-emerald-700', 'text-emerald-300', 'bg-rose-950/60', 'border-rose-700', 'text-rose-300', 'bg-gray-800', 'border-gray-700', 'text-gray-300');
+      if (type === 'success') {
+        uploadStatus.className = 'mt-4 p-3 rounded-xl text-xs font-medium border bg-emerald-950/60 border-emerald-700 text-emerald-300';
+      } else if (type === 'error') {
+        uploadStatus.className = 'mt-4 p-3 rounded-xl text-xs font-medium border bg-rose-950/60 border-rose-700 text-rose-300';
+      } else {
+        uploadStatus.className = 'mt-4 p-3 rounded-xl text-xs font-medium border bg-gray-800 border-gray-700 text-gray-300';
+      }
+      uploadStatus.innerText = msg;
+    }
+
+    async function handleChatSubmit(e) {
+      e.preventDefault();
+      const query = userInput.value.trim();
+      if (!query) return;
+
+      appendMessage(query, 'user');
+      userInput.value = '';
+      userInput.disabled = true;
+      sendBtn.disabled = true;
+
+      const loadingId = appendLoading();
+
+      try {
+        const formData = new FormData();
+        formData.append('query', query);
+
+        const res = await fetch('/chat', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        removeLoading(loadingId);
+
+        if (res.ok) {
+          appendMessage(data.ai_answer, 'bot');
+        } else {
+          appendMessage('Error retrieving response.', 'bot');
+        }
+      } catch (err) {
+        removeLoading(loadingId);
+        appendMessage('Failed to connect to the server.', 'bot');
+      } finally {
+        userInput.disabled = false;
+        sendBtn.disabled = false;
+        userInput.focus();
+      }
+    }
+
+    function appendMessage(text, sender) {
+      const isUser = sender === 'user';
+      const msgDiv = document.createElement('div');
+      msgDiv.className = `flex gap-3 max-w-2xl ${isUser ? 'ml-auto flex-row-reverse' : ''}`;
+
+      const avatar = document.createElement('div');
+      avatar.className = `w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-white text-xs ${isUser ? 'bg-blue-600' : 'bg-cyan-600'}`;
+      avatar.innerHTML = `<i class="fa-solid ${isUser ? 'fa-user' : 'fa-robot'}"></i>`;
+
+      const bubble = document.createElement('div');
+      bubble.className = `glass p-4 rounded-2xl text-sm leading-relaxed ${isUser ? 'rounded-tr-none bg-blue-900/30 text-white' : 'rounded-tl-none text-gray-200'}`;
+      bubble.innerText = text;
+
+      msgDiv.appendChild(avatar);
+      msgDiv.appendChild(bubble);
+      chatMessages.appendChild(msgDiv);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function appendLoading() {
+      const id = 'loading-' + Date.now();
+      const loadDiv = document.createElement('div');
+      loadDiv.id = id;
+      loadDiv.className = 'flex gap-3 max-w-2xl';
+      loadDiv.innerHTML = `
+        <div class="w-8 h-8 rounded-lg bg-cyan-600 flex items-center justify-center shrink-0 text-white text-xs">
+          <i class="fa-solid fa-robot"></i>
+        </div>
+        <div class="glass p-4 rounded-2xl rounded-tl-none text-sm text-gray-400 flex items-center gap-2">
+          <i class="fa-solid fa-circle-notch fa-spin"></i> Analyzing context...
+        </div>
+      `;
+      chatMessages.appendChild(loadDiv);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return id;
+    }
+
+    function removeLoading(id) {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    }
+
+    function clearChat() {
+      chatMessages.innerHTML = '';
+    }
+  </script>
+</body>
+</html>
