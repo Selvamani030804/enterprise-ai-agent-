@@ -1,12 +1,14 @@
 import os
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
+import shutil
+from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from rag_engine import process_pdf, query_rag_with_llm
+from fastapi.middleware.cors import CORSMiddleware
+from rag_engine import process_pdf_and_index, query_rag_engine
 
 app = FastAPI(
-    title="Enterprise AI Agent API",
-    description="High-performance document intelligence system powered by RAG & Gemini",
+    title="Enterprise AI Document Intelligence Agent",
+    description="Developed by R. Selvamani - Enterprise AI Engineer © 2026",
     version="1.0.0"
 )
 
@@ -18,41 +20,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Robust template directory resolution (works from anywhere)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+templates = Jinja2Templates(directory="templates")
+UPLOAD_DIR = "uploaded_docs"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-templates = Jinja2Templates(directory=TEMPLATES_DIR)
-
-@app.get("/")
-def home_dashboard(request: Request):
-    """Serve the interactive web frontend dashboard."""
-    return templates.TemplateResponse("index.html", {"request": request})
+@app.get("/", response_class=HTMLResponse)
+async def home_dashboard(request: Request):
+    return templates.TemplateResponse(request=request, name="index.html")
 
 @app.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
-    if not file.filename.endswith(".pdf"):
+async def upload_pdf(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
     
-    contents = await file.read()
-    chunk_count = process_pdf(contents, file.filename)
+    file_path = os.path.join(UPLOAD_DIR, file.filename)
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
     
-    return {
-        "filename": file.filename,
-        "status": "success",
-        "chunks_indexed": chunk_count,
-        "message": f"Successfully indexed {chunk_count} text chunks into Vector DB."
-    }
+    try:
+        chunks_indexed = process_pdf_and_index(file_path)
+        return {
+            "status": "success",
+            "message": f"Successfully indexed {file.filename}",
+            "chunks_indexed": chunks_indexed
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat")
-def ask_document(query: str = Form(...)):
+async def chat_with_docs(query: str = Form(...)):
     if not query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
     
-    result = query_rag_with_llm(query)
-    
-    return {
-        "query": query,
-        "ai_answer": result["answer"],
-        "retrieved_context": result["context_used"]
-    }
+    try:
+        response = query_rag_engine(query)
+        return {
+            "query": query,
+            "ai_answer": response["answer"],
+            "model_used": response.get("model_used", "Gemini Multi-Tier"),
+            "context_sources": response["sources"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
