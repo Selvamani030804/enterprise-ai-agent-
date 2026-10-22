@@ -1,109 +1,112 @@
-import io
 import os
-import requests
+import pypdf
 import chromadb
-from pypdf import PdfReader
-from dotenv import load_dotenv
+from chromadb.utils import embedding_functions
+import requests
 
-load_dotenv()
+CHROMA_DATA_PATH = "chroma_db"
+os.makedirs(CHROMA_DATA_PATH, exist_ok=True)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+chroma_client = chromadb.PersistentClient(path=CHROMA_DATA_PATH)
+default_ef = embedding_functions.DefaultEmbeddingFunction()
+collection = chroma_client.get_or_create_collection(
+    name="enterprise_knowledge_base",
+    embedding_function=default_ef
+)
 
-# Initialize ChromaDB persistent client
-chroma_client = chromadb.PersistentClient(path="./chroma_db")
-collection = chroma_client.get_or_create_collection(name="enterprise_docs")
+def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150):
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
+    return chunks
 
-def process_pdf(file_bytes: bytes, filename: str) -> int:
-    """PDF-la irundhu text extract panni chunks-ah ChromaDB-la store pannum."""
-    reader = PdfReader(io.BytesIO(file_bytes))
+def process_pdf_and_index(pdf_path: str):
+    reader = pypdf.PdfReader(pdf_path)
     full_text = ""
     for page in reader.pages:
         extracted = page.extract_text()
         if extracted:
             full_text += extracted + "\n"
 
-    chunk_size = 500
-    overlap = 50
-    chunks = []
-    start = 0
-    while start < len(full_text):
-        end = start + chunk_size
-        chunks.append(full_text[start:end])
-        start += chunk_size - overlap
+    if not full_text.strip():
+        raise Exception("No readable text found in the PDF.")
 
-    if not chunks:
-        return 0
+    chunks = chunk_text(full_text)
+    doc_ids = [f"{os.path.basename(pdf_path)}_chunk_{i}" for i in range(len(chunks))]
+    metadatas = [{"source": os.path.basename(pdf_path)} for _ in chunks]
 
-    ids = [f"{filename}_{i}" for i in range(len(chunks))]
-    metadatas = [{"source": filename, "chunk_index": i} for i in range(len(chunks))]
-
-    collection.add(
+    collection.upsert(
         documents=chunks,
-        metadatas=metadatas,
-        ids=ids
+        ids=doc_ids,
+        metadatas=metadatas
     )
     return len(chunks)
 
-def query_rag_with_llm(user_question: str) -> dict:
-    """ChromaDB context retrieve panni, automatic model fallback vazhiya guaranteed response generate pannum."""
-    # 1. Retrieve matching context chunks
+def call_gemini_api(prompt: str):
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise Exception("GEMINI_API_KEY is not set in environment.")
+
+    models_to_try = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash"
+    ]
+
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
+        }
+
+        try:
+            res = requests.post(url, json=payload, headers=headers, timeout=30)
+            if res.status_code == 200:
+                data = res.json()
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                return {"answer": text, "model_used": model_name}
+        except Exception:
+            continue
+
+    raise Exception("All fallback Gemini models failed or rate limits exceeded.")
+
+def query_rag_engine(user_query: str):
     results = collection.query(
-        query_texts=[user_question],
+        query_texts=[user_query],
         n_results=3
     )
-    
-    docs = results.get("documents", [[]])[0]
-    context = "\n---\n".join(docs) if docs else "No relevant document context found."
 
-    prompt = f"""You are an enterprise AI assistant. Answer the user question based strictly on the provided document context. If the answer is not in the context, say "I cannot find this information in the uploaded documents."
+    documents = results.get("documents", [[]])[0]
+    metadatas = results.get("metadatas", [[]])[0]
+
+    if not documents:
+        context = "No relevant context found in documents."
+        sources = []
+    else:
+        context = "\n---\n".join(documents)
+        sources = list(set([m.get("source", "Unknown") for m in metadatas if m]))
+
+    prompt = f"""You are an enterprise AI assistant developed by R. Selvamani.
+Answer the user's question accurately using ONLY the provided document context.
+If the information is not in the context, clearly state that the document does not contain that info.
 
 Context:
 {context}
 
 Question:
-{user_question}
+{user_query}
 
 Answer:"""
 
-    payload = {
-        "contents": [
-            {
-                "parts": [{"text": prompt}]
-            }
-        ]
-    }
-
-    # Fallback model list: Ondhu fail aanaal adutha model automatic-aa run aagum
-    candidate_models = [
-        "gemini-flash-latest",
-        "gemini-3.5-flash-lite",
-        "gemini-2.5-flash",
-        "gemini-3.8-flash"
-    ]
-
-    ai_text = None
-    last_error = ""
-
-    for model_name in candidate_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        try:
-            res = requests.post(url, json=payload, timeout=20)
-            data = res.json()
-
-            if "candidates" in data and len(data["candidates"]) > 0:
-                ai_text = data["candidates"][0]["content"]["parts"][0]["text"]
-                break
-            elif "error" in data:
-                last_error = data["error"].get("message", "Error")
-                continue
-        except Exception as e:
-            last_error = str(e)
-            continue
-
-    if not ai_text:
-        ai_text = f"API Error across all models: {last_error}"
-
+    response = call_gemini_api(prompt)
     return {
-        "answer": ai_text,
-        "context_used": context
+        "answer": response["answer"],
+        "model_used": response["model_used"],
+        "sources": sources
     }
